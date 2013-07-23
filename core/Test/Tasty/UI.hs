@@ -27,6 +27,18 @@ indentSize = 2
 indent :: Int -> String
 indent n = replicate (indentSize * n) ' '
 
+-- | Color the description of a test result green or red, depending on
+-- success or failure.
+withResultColor
+  :: Bool -- ^ test passed?
+  -> String -- ^ description
+  -> String -- ^ colored description
+withResultColor ok result =
+  let
+    color = if ok then "\ESC[32m" else "\ESC[31m"
+    nullColor = "\ESC[0m"
+  in color ++ result ++ nullColor
+
 -- handle multi-line result descriptions properly
 formatDesc
   :: Int -- indent
@@ -65,11 +77,11 @@ runUI opts tree smap = do
 
   case failures st of
     0 -> do
-      printf "All %d tests passed\n" (ix st)
+      printf (withResultColor True "All %d tests passed\n") (ix st)
       exitSuccess
 
     fs -> do
-      printf "%d out of %d tests failed\n" fs (ix st)
+      printf (withResultColor False "%d out of %d tests failed\n") fs (ix st)
       exitFailure
 
   where
@@ -92,7 +104,10 @@ runUI opts tree smap = do
             Exception e -> return (False, "Exception: " ++ show e)
             _ -> retry
 
-      liftIO $ printf "%s%s: %s\n" (indent level) name (formatDesc (level+1) rDesc)
+      liftIO $ printf "%s%s: %s\n"
+        (indent level)
+        name
+        (withResultColor rOk $ formatDesc (level+1) rDesc)
       let
         ix' = ix+1
         updateFailures = if rOk then id else (+1)
