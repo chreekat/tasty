@@ -1,5 +1,6 @@
 module Test.Tasty.UI (runUI) where
 
+import Control.Applicative ((<$>))
 import Control.Monad.State
 import Control.Concurrent.STM
 import Test.Tasty.Core
@@ -9,14 +10,19 @@ import Text.Printf
 import qualified Data.IntMap as IntMap
 import Data.Maybe
 import System.Exit
+import System.IO (hIsTerminalDevice, stdout)
+
+-- | A function that colors result descriptions.
+type ResultColorizer = Bool -> String -> String
 
 data RunnerState = RunnerState
   { ix :: !Int
   , nestedLevel :: !Int
   , failures :: !Int
+  , colorizer :: ResultColorizer
   }
 
-initialState :: RunnerState
+initialState :: ResultColorizer -> RunnerState
 initialState = RunnerState 0 0 0
 
 type M = StateT RunnerState IO
@@ -38,6 +44,14 @@ withResultColor ok result =
     color = if ok then "\ESC[32m" else "\ESC[31m"
     nullColor = "\ESC[0m"
   in color ++ result ++ nullColor
+
+-- | Determine which result-coloring function to use.
+colorFuncGen :: IO ResultColorizer
+colorFuncGen = do
+  isTty <- hIsTerminalDevice stdout
+  return $ if isTty
+    then withResultColor
+    else const id
 
 -- handle multi-line result descriptions properly
 formatDesc
@@ -65,8 +79,9 @@ formatDesc n desc =
 -- | A simple console UI
 runUI :: Runner
 runUI opts tree smap = do
+  colorizer <- colorFuncGen
   st <-
-    flip execStateT initialState $ getApp $
+    flip execStateT (initialState colorizer) $ getApp $
       foldTestTree
         (runSingleTest smap)
         runGroup
@@ -77,11 +92,11 @@ runUI opts tree smap = do
 
   case failures st of
     0 -> do
-      printf (withResultColor True "All %d tests passed\n") (ix st)
+      printf (colorizer True "All %d tests passed\n") (ix st)
       exitSuccess
 
     fs -> do
-      printf (withResultColor False "%d out of %d tests failed\n") fs (ix st)
+      printf (colorizer False "%d out of %d tests failed\n") fs (ix st)
       exitFailure
 
   where
@@ -90,7 +105,11 @@ runUI opts tree smap = do
       => IntMap.IntMap (TVar Status)
       -> OptionSet -> TestName -> t -> AppMonoid M
     runSingleTest smap _opts name _test = AppMonoid $ do
-      st@RunnerState { ix = ix, nestedLevel = level } <- get
+      st@RunnerState
+        { ix = ix
+        , nestedLevel = level
+        , colorizer = colorizer
+        } <- get
       let
         statusVar =
           fromMaybe (error "internal error: index out of bounds") $
@@ -107,7 +126,7 @@ runUI opts tree smap = do
       liftIO $ printf "%s%s: %s\n"
         (indent level)
         name
-        (withResultColor rOk $ formatDesc (level+1) rDesc)
+        (colorizer rOk $ formatDesc (level+1) rDesc)
       let
         ix' = ix+1
         updateFailures = if rOk then id else (+1)
